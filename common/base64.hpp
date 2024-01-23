@@ -78,10 +78,10 @@ public:
     */
     template<typename Input_iterator, typename Output_iterator>
     static Output_iterator encode(Input_iterator in_begin, Input_iterator in_end, Output_iterator out,
-                                  alphabet alphabet = alphabet::standard)
+                                  alphabet alphabet_ = alphabet::standard)
     {
         constexpr auto pad = '=';
-        const char* alpha  = alphabet == alphabet::url_filename_safe
+        const char* alpha  = alphabet_ == alphabet::url_filename_safe
                                 ? "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
                                 : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -341,7 +341,7 @@ public:
     }
 
 private:
-    static std::uint8_t _base64_value(alphabet& alphabet, char c)
+    static std::uint8_t _base64_value(alphabet& alphabet_, char c)
     {
         if (c >= 'A' && c <= 'Z') {
             return c - 'A';
@@ -352,13 +352,13 @@ private:
         }
 
         // comes down to alphabet
-        if (alphabet == alphabet::standard) {
+        if (alphabet_ == alphabet::standard) {
             if (c == '+') {
                 return 62;
             } else if (c == '/') {
                 return 63;
             }
-        } else if (alphabet == alphabet::url_filename_safe) {
+        } else if (alphabet_ == alphabet::url_filename_safe) {
             if (c == '-') {
                 return 62;
             } else if (c == '_') {
@@ -367,19 +367,19 @@ private:
         } // auto detect
         else {
             if (c == '+') {
-                alphabet = alphabet::standard;
+                alphabet_ = alphabet::standard;
 
                 return 62;
             } else if (c == '/') {
-                alphabet = alphabet::standard;
+                alphabet_ = alphabet::standard;
 
                 return 63;
             } else if (c == '-') {
-                alphabet = alphabet::url_filename_safe;
+                alphabet_ = alphabet::url_filename_safe;
 
                 return 62;
             } else if (c == '_') {
-                alphabet = alphabet::url_filename_safe;
+                alphabet_ = alphabet::url_filename_safe;
 
                 return 63;
             }

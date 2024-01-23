@@ -173,6 +173,7 @@ class TensorNameMap:
         MODEL_TENSOR.FFN_GATE_INP: (
             "layers.{bid}.feed_forward.gate",           # mixtral
             "model.layers.{bid}.block_sparse_moe.gate", # mixtral
+            "model.layers.{bid}.mlp.gate",              # deepseek
         ),
 
         # Feed-forward up
@@ -198,6 +199,11 @@ class TensorNameMap:
         MODEL_TENSOR.FFN_UP_EXP: (
             "layers.{bid}.feed_forward.experts.{xid}.w3",           # mixtral
             "model.layers.{bid}.block_sparse_moe.experts.{xid}.w3", # mixtral
+            "model.layers.{bid}.mlp.experts.{xid}.up_proj",         # deepseek
+        ),
+
+        MODEL_TENSOR.FFN_UP_SHARED: (
+            "model.layers.{bid}.mlp.shared_experts.up_proj",        # deepseek
         ),
 
         # AWQ-activation gate
@@ -214,8 +220,13 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
-            "layers.{bid}.feed_forward.experts.{xid}.w1",           # mixtral
-            "model.layers.{bid}.block_sparse_moe.experts.{xid}.w1", # mixtral
+            "layers.{bid}.feed_forward.experts.{xid}.w1",               # mixtral
+            "model.layers.{bid}.block_sparse_moe.experts.{xid}.w1",     # mixtral
+            "model.layers.{bid}.mlp.experts.{xid}.gate_proj",    # deepseek
+        ),
+
+        MODEL_TENSOR.FFN_GATE_SHARED: (
+            "model.layers.{bid}.mlp.shared_experts.gate_proj",  # deepseek
         ),
 
         # Feed-forward down
@@ -240,6 +251,11 @@ class TensorNameMap:
         MODEL_TENSOR.FFN_DOWN_EXP: (
             "layers.{bid}.feed_forward.experts.{xid}.w2",           # mixtral
             "model.layers.{bid}.block_sparse_moe.experts.{xid}.w2", # mixtral
+            "model.layers.{bid}.mlp.experts.{xid}.down_proj",       # deepseek
+        ),
+
+        MODEL_TENSOR.FFN_DOWN_SHARED: (
+            "model.layers.{bid}.mlp.shared_experts.down_proj",      # deepseek
         ),
 
         MODEL_TENSOR.ATTN_Q_NORM: (
@@ -259,7 +275,7 @@ class TensorNameMap:
 
     mapping: dict[str, tuple[MODEL_TENSOR, str]]
 
-    def __init__(self, arch: MODEL_ARCH, n_blocks: int):
+    def __init__(self, arch: MODEL_ARCH, n_blocks: int, n_experts: int=64):
         self.mapping = {}
         for tensor, keys in self.mappings_cfg.items():
             if tensor not in MODEL_TENSORS[arch]:
@@ -273,7 +289,7 @@ class TensorNameMap:
                 if tensor not in MODEL_TENSORS[arch]:
                     continue
                 # TODO: make this configurable
-                n_experts = 8
+                # n_experts = 8
                 for xid in range(n_experts):
                     tensor_name = TENSOR_NAMES[tensor].format(bid = bid, xid = xid)
                     self.mapping[tensor_name] = (tensor, tensor_name)

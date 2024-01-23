@@ -351,6 +351,12 @@ class GGUFWriter:
     def add_expert_used_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_USED_COUNT.format(arch=self.arch), count)
 
+    def add_expert_shared_count(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.EXPERT_SHARED_COUNT.format(arch=self.arch), count)
+
+    def add_expert_moe_ff(self, length: int) -> None:
+        self.add_uint32(Keys.LLM.EXPERT_MOE_FF.format(arch=self.arch), length)
+
     def add_layer_norm_eps(self, value: float) -> None:
         self.add_float32(Keys.Attention.LAYERNORM_EPS.format(arch=self.arch), value)
 
