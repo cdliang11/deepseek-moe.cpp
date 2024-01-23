@@ -77,6 +77,7 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <iostream>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -93,7 +94,7 @@
 #endif
 
 #define LLAMA_MAX_NODES   8192
-#define LLAMA_MAX_EXPERTS 8
+#define LLAMA_MAX_EXPERTS 70   // 8
 
 //
 // logging
@@ -235,6 +236,8 @@ enum llm_kv {
     LLM_KV_TENSOR_DATA_LAYOUT,
     LLM_KV_EXPERT_COUNT,
     LLM_KV_EXPERT_USED_COUNT,
+    LLM_KV_EXPERT_SHARED_COUNT,
+    LLM_KV_EXPERT_MOE_FF,
 
     LLM_KV_ATTENTION_HEAD_COUNT,
     LLM_KV_ATTENTION_HEAD_COUNT_KV,
@@ -289,6 +292,8 @@ static std::map<llm_kv, std::string> LLM_KV_NAMES = {
     { LLM_KV_TENSOR_DATA_LAYOUT,            "%s.tensor_data_layout"    },
     { LLM_KV_EXPERT_COUNT,                  "%s.expert_count"          },
     { LLM_KV_EXPERT_USED_COUNT,             "%s.expert_used_count"     },
+    { LLM_KV_EXPERT_SHARED_COUNT,           "%s.expert_shared_count"   },
+    { LLM_KV_EXPERT_MOE_FF,                 "%s.expert_moe_ff"         },
 
     { LLM_KV_ATTENTION_HEAD_COUNT,          "%s.attention.head_count"             },
     { LLM_KV_ATTENTION_HEAD_COUNT_KV,       "%s.attention.head_count_kv"          },
@@ -357,6 +362,9 @@ enum llm_tensor {
     LLM_TENSOR_FFN_DOWN_EXP,
     LLM_TENSOR_FFN_GATE_EXP,
     LLM_TENSOR_FFN_UP_EXP,
+    LLM_TENSOR_FFN_SHARED_DOWN,
+    LLM_TENSOR_FFN_SHARED_GATE,
+    LLM_TENSOR_FFN_SHARED_UP,
     LLM_TENSOR_ATTN_Q_NORM,
     LLM_TENSOR_ATTN_K_NORM,
 };
@@ -383,6 +391,9 @@ static std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NAMES = 
             { LLM_TENSOR_FFN_GATE_EXP,    "blk.%d.ffn_gate.%d" },
             { LLM_TENSOR_FFN_DOWN_EXP,    "blk.%d.ffn_down.%d" },
             { LLM_TENSOR_FFN_UP_EXP,      "blk.%d.ffn_up.%d" },
+            { LLM_TENSOR_FFN_SHARED_DOWN, "blk.%d.ffn_shared_down" },  // deepseek
+            { LLM_TENSOR_FFN_SHARED_GATE, "blk.%d.ffn_shared_gate" },
+            { LLM_TENSOR_FFN_SHARED_UP,   "blk.%d.ffn_shared_up"},
         },
     },
     {
@@ -1319,6 +1330,8 @@ struct llama_hparams {
     uint32_t n_ff;
     uint32_t n_expert = 0;
     uint32_t n_expert_used = 0;
+    uint32_t n_expert_shared = 0;
+    uint32_t n_expert_moe_ff = 0;   // deepseek-moe
 
     float f_norm_eps;
     float f_norm_rms_eps;
@@ -1347,6 +1360,8 @@ struct llama_hparams {
         if (this->n_ff          != other.n_ff)          return true;
         if (this->n_expert      != other.n_expert)      return true;
         if (this->n_expert_used != other.n_expert_used) return true;
+        if (this->n_expert_shared != other.n_expert_shared) return true;
+        if (this->n_expert_moe_ff != other.n_expert_moe_ff) return true;
 
         if (this->rope_finetuned  != other.rope_finetuned)  return true;
         if (this->n_yarn_orig_ctx != other.n_yarn_orig_ctx) return true;
@@ -1437,6 +1452,9 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_exp[LLAMA_MAX_EXPERTS];
     struct ggml_tensor * ffn_down_exp[LLAMA_MAX_EXPERTS];
     struct ggml_tensor * ffn_up_exp  [LLAMA_MAX_EXPERTS];
+    struct ggml_tensor * ffn_shared_gate;
+    struct ggml_tensor * ffn_shared_down;
+    struct ggml_tensor * ffn_shared_up;
 
     // ff bias
     struct ggml_tensor * ffn_down_b; // b2
@@ -2680,14 +2698,21 @@ static void llm_load_hparams(
     ml.get_key  (LLM_KV_BLOCK_COUNT,          hparams.n_layer);
     ml.get_key  (LLM_KV_EXPERT_COUNT,         hparams.n_expert,      false);
     ml.get_key  (LLM_KV_EXPERT_USED_COUNT,    hparams.n_expert_used, false);
+    ml.get_key  (LLM_KV_EXPERT_SHARED_COUNT,  hparams.n_expert_shared, false);
+    ml.get_key  (LLM_KV_EXPERT_MOE_FF,        hparams.n_expert_moe_ff, false);
 
     GGML_ASSERT(hparams.n_expert <= LLAMA_MAX_EXPERTS);
     GGML_ASSERT(hparams.n_expert_used <= hparams.n_expert);
+    GGML_ASSERT(hparams.n_expert_shared <= hparams.n_expert_used);
+    GGML_ASSERT(hparams.n_expert_moe_ff < hparams.n_ff);
     if (hparams.n_expert > 0) {
         GGML_ASSERT(hparams.n_expert_used > 0);
     } else {
         GGML_ASSERT(hparams.n_expert_used == 0);
     }
+    // if (hparams.n_expert_moe_ff <= 0) {
+    //     hparams.n_expert_moe_ff =  hparams.n_ff;
+    // }
 
     // n_head_kv is optional, default to n_head
     hparams.n_head_kv = hparams.n_head;
@@ -3162,6 +3187,8 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
     LLAMA_LOG_INFO("%s: n_ff             = %u\n",     __func__, hparams.n_ff);
     LLAMA_LOG_INFO("%s: n_expert         = %u\n",     __func__, hparams.n_expert);
     LLAMA_LOG_INFO("%s: n_expert_used    = %u\n",     __func__, hparams.n_expert_used);
+    LLAMA_LOG_INFO("%s: n_expert_shared  = %u\n",     __func__, hparams.n_expert_shared);
+    LLAMA_LOG_INFO("%s: n_expert_moe_ff  = %u\n",     __func__, hparams.n_expert_moe_ff);
     LLAMA_LOG_INFO("%s: rope scaling     = %s\n",     __func__, rope_scaling_type.c_str());
     LLAMA_LOG_INFO("%s: freq_base_train  = %.1f\n",   __func__, hparams.rope_freq_base_train);
     LLAMA_LOG_INFO("%s: freq_scale_train = %g\n",     __func__, hparams.rope_freq_scale_train);
@@ -3383,8 +3410,8 @@ static bool llm_load_tensors(
                         layer.ffn_gate_inp = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd}, false);
 
                         if (layer.ffn_gate_inp == nullptr) {
-                            GGML_ASSERT(hparams.n_expert      == 0);
-                            GGML_ASSERT(hparams.n_expert_used == 0);
+                            // GGML_ASSERT(hparams.n_expert      == 0);
+                            // GGML_ASSERT(hparams.n_expert_used == 0);
 
                             layer.ffn_gate = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff});
                             layer.ffn_down = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd});
@@ -3395,9 +3422,15 @@ static bool llm_load_tensors(
 
                             // MoE branch
                             for (uint32_t x = 0; x < hparams.n_expert; ++x) {
-                                layer.ffn_gate_exp[x] = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXP, "weight", i, x), {n_embd,   n_ff});
-                                layer.ffn_down_exp[x] = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXP, "weight", i, x), {  n_ff, n_embd});
-                                layer.ffn_up_exp[x]   = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXP,   "weight", i, x), {n_embd,   n_ff});
+                                layer.ffn_gate_exp[x] = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXP, "weight", i, x), {n_embd,   hparams.n_expert_moe_ff});
+                                layer.ffn_down_exp[x] = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXP, "weight", i, x), {  hparams.n_expert_moe_ff, n_embd});
+                                layer.ffn_up_exp[x]   = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXP,   "weight", i, x), {n_embd,   hparams.n_expert_moe_ff});
+                            }
+                            // shared TODO: fix
+                            if (hparams.n_expert_shared > 0) {
+                                layer.ffn_shared_down = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_SHARED_DOWN, "weight", i), {hparams.n_expert_moe_ff * hparams.n_expert_shared, n_embd});
+                                layer.ffn_shared_up   = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_SHARED_UP,   "weight", i), {n_embd, hparams.n_expert_moe_ff * hparams.n_expert_shared});
+                                layer.ffn_shared_gate = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_SHARED_GATE, "weight", i), {n_embd, hparams.n_expert_moe_ff * hparams.n_expert_shared});
                             }
                         }
                     }
@@ -4285,6 +4318,7 @@ struct llm_build_context {
     const int64_t n_embd_v_gqa;
     const int64_t n_expert;
     const int64_t n_expert_used;
+    const int64_t n_expert_shared;
 
     const float freq_base;
     const float freq_scale;
@@ -4330,6 +4364,7 @@ struct llm_build_context {
         n_embd_v_gqa     (hparams.n_embd_v_gqa()),
         n_expert         (hparams.n_expert),
         n_expert_used    (hparams.n_expert_used),
+        n_expert_shared  (hparams.n_expert_shared),
         freq_base        (cparams.rope_freq_base),
         freq_scale       (cparams.rope_freq_scale),
         ext_factor       (cparams.yarn_ext_factor),
@@ -4473,7 +4508,7 @@ struct llm_build_context {
                 // MoE branch
                 cur = llm_build_norm(ctx0, ffn_inp, hparams,
                         model.layers[il].ffn_norm, NULL,
-                        LLM_NORM_RMS, cb, il);
+                        LLM_NORM_RMS, cb, il);   // [n_tokens, hidden_dim]
                 cb(cur, "ffn_norm", il);
 
                 ggml_tensor * logits = ggml_mul_mat(ctx0, model.layers[il].ffn_gate_inp, cur); // [n_tokens, num_experts]
@@ -4492,6 +4527,7 @@ struct llm_build_context {
 
                 weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens); // [n_tokens, num_experts_per_tok]
 
+                // 选择完专家模型之后进行概率归一化
                 ggml_tensor * weights_sum = ggml_sum_rows(ctx0, weights);
                 cb(weights_sum, "ffn_moe_weights_sum", il);
 
@@ -4500,10 +4536,11 @@ struct llm_build_context {
 
                 // compute expert outputs
                 ggml_tensor * moe_out = nullptr;
-
+                ggml_tensor * shared_out = nullptr;
                 for (int i = 0; i < n_expert_used; ++i) {
                     ggml_tensor * cur_expert;
-
+                    // selected_experts [n_tokens, num_experts_per_tok]  cur [n_tokens, hidden_dim]
+                    // model.layers[il].ffn_up_exp
                     ggml_tensor * cur_up = ggml_mul_mat_id(ctx0, model.layers[il].ffn_up_exp, n_expert, selected_experts, i, cur);
                     cb(cur_up, "ffn_moe_up", il);
 
@@ -4530,8 +4567,19 @@ struct llm_build_context {
                         cb(moe_out, "ffn_moe_out", il);
                     }
                 }
-
-                cur = moe_out;
+                // shared_expert
+                if (model.layers[il].ffn_shared_gate != nullptr) {
+                    shared_out = llm_build_ffn(ctx0, cur,
+                                    model.layers[il].ffn_shared_up, NULL,
+                                    model.layers[il].ffn_shared_gate, NULL,
+                                    model.layers[il].ffn_shared_down, NULL,
+                                    NULL,
+                                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
+                    cb(shared_out, "ffn_shared_out", il);
+                    cur = ggml_add(ctx0, moe_out, shared_out);
+                } else {
+                    cur = moe_out;
+                }
             }
 
             cur = ggml_add(ctx0, cur, ffn_inp);
@@ -8502,14 +8550,14 @@ static ggml_type get_k_quant_type(quantize_state_internal & qs, ggml_type new_ty
             // nearly negligible increase in model size by quantizing this tensor with more bits:
             if (new_type == GGML_TYPE_Q3_K || new_type == GGML_TYPE_Q4_K) new_type = GGML_TYPE_Q5_K;
         }
-        if (qs.model.hparams.n_expert == 8) {
+        if (qs.model.hparams.n_expert >= 8) {
             // for the 8-expert model, bumping this to Q8_0 trades just ~128MB
             // TODO: explore better strategies
             new_type = GGML_TYPE_Q8_0;
         }
         ++qs.i_attention_wv;
     } else if (name.find("attn_k.weight") != std::string::npos) {
-        if (qs.model.hparams.n_expert == 8) {
+        if (qs.model.hparams.n_expert >= 8) {
             // for the 8-expert model, bumping this to Q8_0 trades just ~128MB
             // TODO: explore better strategies
             new_type = GGML_TYPE_Q8_0;
@@ -8525,7 +8573,7 @@ static ggml_type get_k_quant_type(quantize_state_internal & qs, ggml_type new_ty
             // sprinkled in the model. Hence, simply dividing i_feed_forward_w2 by n_expert does not work
             // for getting the current layer as I initially thought, and we need to resort to parsing the
             // tensor name.
-            n_layer = qs.n_feed_forward_w2 / n_expert;
+            n_layer = qs.n_feed_forward_w2 / n_expert + 1;
             if (sscanf(name.c_str(), "blk.%d.ffn_down", &i_layer) != 1) {
                 throw std::runtime_error(format("Failed to determine layer for tensor %s", name.c_str()));
             }
@@ -8712,6 +8760,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             ++qs.n_feed_forward_w2;
         }
     }
+    qs.n_feed_forward_w2 -= 1;
     if (qs.n_attention_wv != qs.n_feed_forward_w2 || (uint32_t)qs.n_attention_wv != model.hparams.n_layer) {
         LLAMA_LOG_WARN("%s ============ Strange model: n_attention_wv = %d, n_feed_forward_w2 = %d, hparams.n_layer = %d\n",
                 __func__, qs.n_attention_wv, qs.n_feed_forward_w2, model.hparams.n_layer);

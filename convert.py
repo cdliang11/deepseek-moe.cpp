@@ -193,6 +193,8 @@ class Params:
     f_norm_eps: Optional[float] = None
     n_experts: Optional[int] = None
     n_experts_used: Optional[int] = None
+    n_experts_shared: Optional[int] = None
+    n_moe_ff: Optional[int] = None
 
     rope_scaling_type: Optional[gguf.RopeScalingType] = None
     f_rope_freq_base: Optional[float] = None
@@ -296,6 +298,13 @@ class Params:
             n_experts = config["num_local_experts"]
             n_experts_used = config["num_experts_per_tok"]
 
+        # deepseek-moe
+        if "n_shared_experts" in config:
+            n_experts = config["n_routed_experts"]
+            n_experts_used = config["num_experts_per_tok"]
+            n_experts_shared = config["n_shared_experts"]
+            n_moe_ff = config["moe_intermediate_size"]
+
         return Params(
             n_vocab=config["vocab_size"],
             n_embd=config["hidden_size"],
@@ -306,6 +315,8 @@ class Params:
             n_head_kv=config.get("num_key_value_heads", n_head),
             n_experts=n_experts,
             n_experts_used=n_experts_used,
+            n_experts_shared=n_experts_shared,
+            n_moe_ff=n_moe_ff,
             f_norm_eps=config["rms_norm_eps"],
             f_rope_freq_base=config.get("rope_theta"),
             rope_scaling_type=rope_scaling_type,
@@ -1057,6 +1068,12 @@ class OutputFile:
 
         if params.n_experts_used:
             self.gguf.add_expert_used_count(params.n_experts_used)
+
+        if params.n_experts_shared:
+            self.gguf.add_expert_shared_count(params.n_experts_shared)
+
+        if params.n_moe_ff:
+            self.gguf.add_expert_moe_ff(params.n_moe_ff)
 
         if params.f_rope_freq_base is not None:
             self.gguf.add_rope_freq_base(params.f_rope_freq_base)

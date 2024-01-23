@@ -40,6 +40,8 @@ class Keys:
         TENSOR_DATA_LAYOUT    = "{arch}.tensor_data_layout"
         EXPERT_COUNT          = "{arch}.expert_count"
         EXPERT_USED_COUNT     = "{arch}.expert_used_count"
+        EXPERT_SHARED_COUNT   = "{arch}.expert_shared_count"
+        EXPERT_MOE_FF         = "{arch}.expert_moe_ff"
 
     class Attention:
         HEAD_COUNT        = "{arch}.attention.head_count"
@@ -124,8 +126,11 @@ class MODEL_TENSOR(IntEnum):
     FFN_UP          = auto()
     FFN_ACT         = auto()
     FFN_GATE_EXP    = auto()
+    FFN_GATE_SHARED = auto()
     FFN_DOWN_EXP    = auto()
+    FFN_DOWN_SHARED = auto()
     FFN_UP_EXP      = auto()
+    FFN_UP_SHARED   = auto()
     ATTN_Q_NORM     = auto()
     ATTN_K_NORM     = auto()
 
@@ -174,8 +179,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_UP:          "blk.{bid}.ffn_up",
     MODEL_TENSOR.FFN_ACT:         "blk.{bid}.ffn",
     MODEL_TENSOR.FFN_GATE_EXP:    "blk.{bid}.ffn_gate.{xid}",
+    MODEL_TENSOR.FFN_GATE_SHARED: "blk.{bid}.ffn_shared_gate",
     MODEL_TENSOR.FFN_DOWN_EXP:    "blk.{bid}.ffn_down.{xid}",
+    MODEL_TENSOR.FFN_DOWN_SHARED: "blk.{bid}.ffn_shared_down",
     MODEL_TENSOR.FFN_UP_EXP:      "blk.{bid}.ffn_up.{xid}",
+    MODEL_TENSOR.FFN_UP_SHARED:   "blk.{bid}.ffn_shared_up",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -196,8 +204,11 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_GATE_SHARED,
         MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_DOWN_SHARED,
         MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_UP_SHARED,
     ],
     MODEL_ARCH.GPTNEOX: [
         MODEL_TENSOR.TOKEN_EMBD,
