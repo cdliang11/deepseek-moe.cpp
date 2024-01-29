@@ -42,6 +42,7 @@ class Keys:
         EXPERT_USED_COUNT     = "{arch}.expert_used_count"
         EXPERT_SHARED_COUNT   = "{arch}.expert_shared_count"
         EXPERT_MOE_FF         = "{arch}.expert_moe_ff"
+        EXPERT_GATE_NORM      = "{arch}.expert_gate_norm"
 
     class Attention:
         HEAD_COUNT        = "{arch}.attention.head_count"
