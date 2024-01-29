@@ -357,6 +357,9 @@ class GGUFWriter:
     def add_expert_moe_ff(self, length: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_MOE_FF.format(arch=self.arch), length)
 
+    def add_expert_gate_norm(self, norm: bool) -> None:
+        self.add_bool(Keys.LLM.EXPERT_GATE_NORM.format(arch=self.arch), norm)
+
     def add_layer_norm_eps(self, value: float) -> None:
         self.add_float32(Keys.Attention.LAYERNORM_EPS.format(arch=self.arch), value)
 

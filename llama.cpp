@@ -238,6 +238,7 @@ enum llm_kv {
     LLM_KV_EXPERT_USED_COUNT,
     LLM_KV_EXPERT_SHARED_COUNT,
     LLM_KV_EXPERT_MOE_FF,
+    LLM_KV_EXPERT_GATE_NORM,
 
     LLM_KV_ATTENTION_HEAD_COUNT,
     LLM_KV_ATTENTION_HEAD_COUNT_KV,
@@ -294,6 +295,7 @@ static std::map<llm_kv, std::string> LLM_KV_NAMES = {
     { LLM_KV_EXPERT_USED_COUNT,             "%s.expert_used_count"     },
     { LLM_KV_EXPERT_SHARED_COUNT,           "%s.expert_shared_count"   },
     { LLM_KV_EXPERT_MOE_FF,                 "%s.expert_moe_ff"         },
+    { LLM_KV_EXPERT_GATE_NORM,              "%s.expert_gate_norm"},
 
     { LLM_KV_ATTENTION_HEAD_COUNT,          "%s.attention.head_count"             },
     { LLM_KV_ATTENTION_HEAD_COUNT_KV,       "%s.attention.head_count_kv"          },
@@ -1332,6 +1334,7 @@ struct llama_hparams {
     uint32_t n_expert_used = 0;
     uint32_t n_expert_shared = 0;
     uint32_t n_expert_moe_ff = 0;   // deepseek-moe
+    bool expert_gate_norm = false;  // deepseek-moe
 
     float f_norm_eps;
     float f_norm_rms_eps;
@@ -1362,6 +1365,7 @@ struct llama_hparams {
         if (this->n_expert_used != other.n_expert_used) return true;
         if (this->n_expert_shared != other.n_expert_shared) return true;
         if (this->n_expert_moe_ff != other.n_expert_moe_ff) return true;
+        if (this->expert_gate_norm != other.expert_gate_norm) return true;
 
         if (this->rope_finetuned  != other.rope_finetuned)  return true;
         if (this->n_yarn_orig_ctx != other.n_yarn_orig_ctx) return true;
@@ -2700,6 +2704,7 @@ static void llm_load_hparams(
     ml.get_key  (LLM_KV_EXPERT_USED_COUNT,    hparams.n_expert_used, false);
     ml.get_key  (LLM_KV_EXPERT_SHARED_COUNT,  hparams.n_expert_shared, false);
     ml.get_key  (LLM_KV_EXPERT_MOE_FF,        hparams.n_expert_moe_ff, false);
+    ml.get_key  (LLM_KV_EXPERT_GATE_NORM,     hparams.expert_gate_norm, false);
 
     GGML_ASSERT(hparams.n_expert <= LLAMA_MAX_EXPERTS);
     GGML_ASSERT(hparams.n_expert_used <= hparams.n_expert);
@@ -3189,6 +3194,7 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
     LLAMA_LOG_INFO("%s: n_expert_used    = %u\n",     __func__, hparams.n_expert_used);
     LLAMA_LOG_INFO("%s: n_expert_shared  = %u\n",     __func__, hparams.n_expert_shared);
     LLAMA_LOG_INFO("%s: n_expert_moe_ff  = %u\n",     __func__, hparams.n_expert_moe_ff);
+    LLAMA_LOG_INFO("%s: expert_gate_norm = %s\n",     __func__, hparams.expert_gate_norm ? "yes" : "no");
     LLAMA_LOG_INFO("%s: rope scaling     = %s\n",     __func__, rope_scaling_type.c_str());
     LLAMA_LOG_INFO("%s: freq_base_train  = %.1f\n",   __func__, hparams.rope_freq_base_train);
     LLAMA_LOG_INFO("%s: freq_scale_train = %g\n",     __func__, hparams.rope_freq_scale_train);
@@ -4527,12 +4533,14 @@ struct llm_build_context {
 
                 weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens); // [n_tokens, num_experts_per_tok]
 
-                // 选择完专家模型之后进行概率归一化
-                ggml_tensor * weights_sum = ggml_sum_rows(ctx0, weights);
-                cb(weights_sum, "ffn_moe_weights_sum", il);
+                if (hparams.expert_gate_norm) {
+                    // 选择完专家模型之后进行概率归一化
+                    ggml_tensor * weights_sum = ggml_sum_rows(ctx0, weights);
+                    cb(weights_sum, "ffn_moe_weights_sum", il);
 
-                weights = ggml_div(ctx0, weights, weights_sum); // [n_tokens, num_experts_per_tok]
-                cb(weights, "ffn_moe_weights_norm", il);
+                    weights = ggml_div(ctx0, weights, weights_sum); // [n_tokens, num_experts_per_tok]
+                    cb(weights, "ffn_moe_weights_norm", il);
+                }
 
                 // compute expert outputs
                 ggml_tensor * moe_out = nullptr;
@@ -4577,6 +4585,7 @@ struct llm_build_context {
                                     LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
                     cb(shared_out, "ffn_shared_out", il);
                     cur = ggml_add(ctx0, moe_out, shared_out);
+                    cb(cur, "ffn_shared_add_moe_out", il);
                 } else {
                     cur = moe_out;
                 }
