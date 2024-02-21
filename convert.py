@@ -293,6 +293,8 @@ class Params:
 
         n_experts = None
         n_experts_used = None
+        n_experts_shared = None
+        n_moe_ff = None
 
         if "num_local_experts" in config:
             n_experts = config["num_local_experts"]
